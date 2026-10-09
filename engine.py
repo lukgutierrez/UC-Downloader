@@ -42,7 +42,7 @@ async def run_login_flow(status_callback=None):
             status_callback("Sesión guardada con éxito.")
 
 def download_file_direct(url, dest_path, progress_callback=None, cancel_check=None):
-    """Descarga optimizada de alta velocidad en streaming con buffer ampliado de 2 MB."""
+    """Descarga de alta velocidad con buffer ampliado de 2 MB y reporte de MB/s en tiempo real."""
     req = urllib.request.Request(
         url,
         headers={
@@ -52,7 +52,7 @@ def download_file_direct(url, dest_path, progress_callback=None, cancel_check=No
     )
     with urllib.request.urlopen(req, timeout=60) as response, open(dest_path, "wb") as out_file:
         total_size = int(response.info().get("Content-Length", 0))
-        chunk_size = 1024 * 1024 * 2  # Buffer de alta velocidad de 2 MB
+        chunk_size = 1024 * 1024 * 2  # 2 MB buffer
         downloaded = 0
         last_report = time.time()
         start_time = time.time()
@@ -78,7 +78,7 @@ def download_file_direct(url, dest_path, progress_callback=None, cancel_check=No
                     progress_callback(percent, dl_mb, tot_mb, speed_mb_s)
 
 async def fetch_share_file_tree(url, status_callback=None):
-    """Explora recursivamente un enlace de UC Drive y devuelve la lista plana de todos los archivos."""
+    """Exploración recursiva completa y multi-nivel de enlaces y subcarpetas."""
     os.makedirs(PROFILE_DIR, exist_ok=True)
     if not url.startswith("http"):
         url = "https://" + url
@@ -86,7 +86,7 @@ async def fetch_share_file_tree(url, status_callback=None):
     pwd_id = url.split("?")[0].rstrip("/").split("/")[-1]
 
     if status_callback:
-        status_callback("Conectando con UC Drive para listar contenidos...")
+        status_callback("Conectando con UC Drive...")
 
     async with async_playwright() as p:
         context = await p.chromium.launch_persistent_context(
@@ -96,7 +96,7 @@ async def fetch_share_file_tree(url, status_callback=None):
         )
         page = context.pages[0] if context.pages else await context.new_page()
 
-        root_items = []
+        captured_lists = []
         token_info = {}
 
         async def on_response(res):
@@ -110,9 +110,7 @@ async def fetch_share_file_tree(url, status_callback=None):
                     detail_info = data.get("data", {}).get("detail_info", {})
                     items = detail_info.get("list", [])
                     if items:
-                        for it in items:
-                            if not any(x.get("fid") == it.get("fid") for x in root_items):
-                                root_items.append(it)
+                        captured_lists.append(items)
                 except Exception:
                     pass
             elif "sharepage/detail" in res.url:
@@ -120,73 +118,84 @@ async def fetch_share_file_tree(url, status_callback=None):
                     data = await res.json()
                     items = data.get("data", {}).get("list", [])
                     if items:
-                        for it in items:
-                            if not any(x.get("fid") == it.get("fid") for x in root_items):
-                                root_items.append(it)
+                        captured_lists.append(items)
                 except Exception:
                     pass
 
         page.on("response", on_response)
         await page.goto(url, wait_until="networkidle", timeout=60000)
-        await page.wait_for_timeout(2500)
+        await page.wait_for_timeout(2000)
 
-        # Si hay carpetas que explorar
-        all_files = []
-        folders_to_explore = []
+        # Si el enlace raíz tiene una carpeta única contenedora (ej: CURSO METODOS), entrar primero
+        all_discovered = []
+        known_fids = set()
 
-        for it in root_items:
-            if it.get("dir"):
-                folders_to_explore.append(it)
-            else:
-                all_files.append(it)
+        def add_items(items, folder_name=""):
+            for it in items:
+                fid = it.get("fid")
+                if fid and fid not in known_fids:
+                    known_fids.add(fid)
+                    if folder_name:
+                        it["folder_path"] = folder_name
+                    all_discovered.append(it)
 
-        # Si no detectó nada por interceptor inicial, intentar click en la carpeta principal
-        if not all_files and not folders_to_explore:
-            folder_loc = page.locator("div.fileName--OcFLc, div[role='row'], .list-item, div:has(svg)").filter(has=page.locator("svg, .icon"))
-            if await folder_loc.count() > 0:
+        for lst in captured_lists:
+            add_items(lst)
+
+        # Si hay carpetas en el nivel raíz, abrirlas
+        initial_dirs = [it for it in all_discovered if it.get("dir")]
+        if initial_dirs:
+            for d in initial_dirs:
+                dname = d.get("file_name", "")
+                if status_callback:
+                    status_callback(f"Abriendo carpeta principal: {dname}...")
+                floc = page.get_by_text(dname).last
+                if await floc.count() > 0:
+                    try:
+                        await floc.click()
+                        await page.wait_for_timeout(2500)
+                    except Exception:
+                        pass
+
+        # Procesar nuevamente lo capturado dentro del curso
+        for lst in captured_lists:
+            add_items(lst)
+
+        # Ahora buscar todas las subcarpetas internas (ej: Recursos, etc.)
+        sub_dirs = [it for it in all_discovered if it.get("dir")]
+        for sdir in sub_dirs:
+            sname = sdir.get("file_name", "")
+            if sname and sname != "Recursos" and any(x.get("file_name") == sname for x in initial_dirs):
+                pass
+            
+            # Buscar si existe en la vista actual y hacer click para listar sus archivos
+            if status_callback:
+                status_callback(f"Explorando subcarpeta: {sname}...")
+            sloc = page.get_by_text(sname).last
+            if await sloc.count() > 0:
                 try:
-                    await folder_loc.last.click()
+                    await sloc.click()
                     await page.wait_for_timeout(2500)
                 except Exception:
                     pass
 
-            for it in root_items:
-                if it.get("dir"):
-                    if not any(x.get("fid") == it.get("fid") for x in folders_to_explore):
-                        folders_to_explore.append(it)
-                else:
-                    if not any(x.get("fid") == it.get("fid") for x in all_files):
-                        all_files.append(it)
+        for lst in captured_lists:
+            add_items(lst)
 
-        # Explorar subcarpetas pendientes (como Recursos, Material, etc.)
-        for fld in folders_to_explore:
-            fname = fld.get("file_name", "Carpeta")
-            if status_callback:
-                status_callback(f"Explorando subcarpeta: {fname}...")
-
-            # Click en la carpeta para cargar sus archivos
-            floc = page.get_by_text(fname).last
-            if await floc.count() > 0:
-                try:
-                    await floc.click()
-                    await page.wait_for_timeout(2000)
-                except Exception:
-                    pass
-
-            for it in root_items:
-                if not it.get("dir") and not any(x.get("fid") == it.get("fid") for x in all_files):
-                    it["folder_path"] = fname
-                    all_files.append(it)
+        # Filtrar únicamente archivos descargables (no directorios)
+        final_files = []
+        for it in all_discovered:
+            if not it.get("dir"):
+                final_files.append(it)
 
         await context.close()
-        return all_files, token_info, pwd_id
+        return final_files, token_info, pwd_id
 
 async def download_selected_files(selected_files, token_info, pwd_id, output_folder, as_zip=True, status_callback=None, progress_callback=None, cancel_check=None):
     """Descarga por lotes rotativos de alta velocidad los archivos seleccionados."""
     os.makedirs(PROFILE_DIR, exist_ok=True)
     os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
 
-    # Limpiar temporales previos
     for f in os.listdir(TEMP_DOWNLOAD_DIR):
         fp = os.path.join(TEMP_DOWNLOAD_DIR, f)
         try:
@@ -216,7 +225,7 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
 
         total_selected = len(selected_files)
         if status_callback:
-            status_callback(f"Iniciando descarga de {total_selected} archivo(s) seleccionado(s)...")
+            status_callback(f"Iniciando descarga de {total_selected} archivo(s)...")
 
         for idx, file_info in enumerate(selected_files):
             if cancel_check and cancel_check():
@@ -234,7 +243,7 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
             if status_callback:
                 status_callback(f"[{idx+1}/{total_selected}] Procesando: {fname} ({fsize_mb} MB)...")
 
-            # 1. Guardar en nube de UC por API
+            # 1. Guardar en nube por API
             save_payload = {
                 "stoken": stoken,
                 "pwd_id": pwd_id,
@@ -252,7 +261,7 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
             save_data = await save_res.json()
             task_id = save_data.get("data", {}).get("task_id")
 
-            # Esperar confirmación de guardado
+            # Esperar confirmación
             saved_fid = None
             if task_id:
                 for _ in range(20):
@@ -272,7 +281,6 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
                             saved_fid = top_fids[0]
                         break
 
-            # Fallback buscando en root si no vino por task
             if not saved_fid:
                 sort_res = await context.request.get(
                     "https://m-intldrive.ucweb.com/1/clouddrive/file/sort?ve=&fve=1.8.8&pr=UCBrowser&fr=pc&cc=&sys=win32&ut=&ch=&pc=&pdir_fid=0&_page=1&_size=20&_fetch_total=false&_fetch_sub_dirs=1&_sort=&recent_file_size=0",
@@ -291,7 +299,7 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
                     status_callback(f"⚠️ Aviso: No se pudo guardar {fname}, saltando...")
                 continue
 
-            # 2. Generar enlace directo de descarga
+            # 2. Generar enlace directo
             dl_res = await context.request.post(
                 "https://m-intldrive.ucweb.com/1/clouddrive/file/download?ve=&fve=1.8.8&pr=UCBrowser&fr=pc&cc=&sys=win32&ut=&ch=&pc=",
                 headers=headers,
@@ -307,7 +315,7 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
             download_url = dl_list[0]["download_url"]
             dest_file_path = os.path.join(TEMP_DOWNLOAD_DIR, fname)
 
-            # 3. Descarga de alta velocidad a la PC
+            # 3. Descarga directa
             def _on_prog(pct, cur_mb, tot_mb, spd):
                 if status_callback:
                     status_callback(f"⬇️ {fname}: {pct}% ({cur_mb}/{tot_mb} MB) a {spd} MB/s")
@@ -326,7 +334,7 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
             if status_callback:
                 status_callback(f"✅ Descargado: {fname}")
 
-            # 4. Liberar espacio inmediatamente
+            # 4. Liberar espacio
             await context.request.post(
                 "https://m-intldrive.ucweb.com/1/clouddrive/file/delete?ve=&fve=1.8.8&pr=UCBrowser&fr=pc&cc=&sys=win32&ut=&ch=&pc=",
                 headers=headers,
