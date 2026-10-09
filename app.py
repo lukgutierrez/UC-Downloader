@@ -9,9 +9,9 @@ import engine
 class UCDownloaderApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("UC Drive Cloud Downloader v2.0 - Pro")
-        self.geometry("820x680")
-        self.minsize(760, 580)
+        self.title("UC Drive Cloud Downloader v2.1 - Pro")
+        self.geometry("840x720")
+        self.minsize(780, 620)
         self.configure(bg="#121316")
 
         self.default_dest = os.path.join(os.path.expanduser("~"), "Downloads")
@@ -19,9 +19,9 @@ class UCDownloaderApp(tk.Tk):
         self.url_var = tk.StringVar(value="")
         self.download_type = tk.StringVar(value="folder")
 
-        # Variables de estado y exploración
+        # Variables de estado
         self.discovered_files = []
-        self.file_vars = []  # Lista de boolean vars para checkboxes
+        self.file_vars = []
         self.token_info = {}
         self.pwd_id = ""
         self.is_downloading = False
@@ -37,7 +37,7 @@ class UCDownloaderApp(tk.Tk):
 
         title_lbl = tk.Label(
             header,
-            text="⚡ UC DRIVE CLOUD DOWNLOADER v2.0",
+            text="⚡ UC DRIVE CLOUD DOWNLOADER v2.1",
             font=("Segoe UI", 15, "bold"),
             fg="#00d26a",
             bg="#1a1b1f"
@@ -137,7 +137,7 @@ class UCDownloaderApp(tk.Tk):
 
         self.lbl_tree_title = tk.Label(
             tree_header,
-            text="ARCHIVOS DETECTADOS EN EL ENLACE (Selecciona los que desees):",
+            text="ARCHIVOS & SUBCARPETAS DETECTADAS (Selecciona los que desees):",
             font=("Segoe UI", 9, "bold"),
             fg="#9aa0a6",
             bg="#121316"
@@ -175,7 +175,7 @@ class UCDownloaderApp(tk.Tk):
         btn_deselect_all.pack(side="right")
 
         # Scrollable Frame for Checkboxes
-        tree_container = tk.Frame(main, bg="#1a1b1f", highlightthickness=1, highlightbackground="#2e313b", height=130)
+        tree_container = tk.Frame(main, bg="#1a1b1f", highlightthickness=1, highlightbackground="#2e313b", height=135)
         tree_container.pack(fill="x", pady=(0, 10))
         tree_container.pack_propagate(False)
 
@@ -194,10 +194,9 @@ class UCDownloaderApp(tk.Tk):
         self.canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Default placeholder in file list
         self.lbl_empty = tk.Label(
             self.scrollable_frame,
-            text="Pega un enlace y presiona '🔍 EXPLORAR LINK' para ver los archivos antes de descargar.",
+            text="Pega un enlace arriba y presiona '🔍 EXPLORAR LINK' para ver videos y PDFs en subcarpetas.",
             font=("Segoe UI", 9, "italic"),
             fg="#6b7280",
             bg="#18191d",
@@ -246,7 +245,7 @@ class UCDownloaderApp(tk.Tk):
         )
         btn_browse.pack(side="right", padx=(8, 0))
 
-        # Format Options & Download / Cancel Buttons
+        # Format Options & Download / Stop Buttons
         action_box = tk.Frame(main, bg="#121316")
         action_box.pack(fill="x", pady=(0, 10))
 
@@ -310,6 +309,46 @@ class UCDownloaderApp(tk.Tk):
         )
         self.btn_stop.pack(side="right", padx=(0, 8))
 
+        # Progress Bars Section (Mejora 3: Visual Progress)
+        prog_frame = tk.Frame(main, bg="#121316")
+        prog_frame.pack(fill="x", pady=(0, 10))
+
+        # Custom ttk style for green progress bar
+        style = ttk.Style(self)
+        style.theme_use('clam')
+        style.configure(
+            "Green.Horizontal.TProgressbar",
+            troughcolor="#1a1b1f",
+            background="#00d26a",
+            darkcolor="#00b55b",
+            lightcolor="#00ff88",
+            bordercolor="#2e313b"
+        )
+
+        prog_top_lbl = tk.Frame(prog_frame, bg="#121316")
+        prog_top_lbl.pack(fill="x", pady=(0, 2))
+
+        self.lbl_file_prog = tk.Label(
+            prog_top_lbl,
+            text="Progreso archivo actual: 0%",
+            font=("Segoe UI", 8),
+            fg="#9aa0a6",
+            bg="#121316"
+        )
+        self.lbl_file_prog.pack(side="left")
+
+        self.lbl_total_prog = tk.Label(
+            prog_top_lbl,
+            text="Progreso lote general: 0/0 archivos",
+            font=("Segoe UI", 8, "bold"),
+            fg="#00d26a",
+            bg="#121316"
+        )
+        self.lbl_total_prog.pack(side="right")
+
+        self.bar_file = ttk.Progressbar(prog_frame, style="Green.Horizontal.TProgressbar", orient="horizontal", mode="determinate")
+        self.bar_file.pack(fill="x")
+
         # Console / Status Section
         console_lbl = tk.Label(
             main,
@@ -326,15 +365,15 @@ class UCDownloaderApp(tk.Tk):
             bg="#0e0f11",
             fg="#c5c8cf",
             relief="flat",
-            height=7,
+            height=6,
             highlightthickness=1,
             highlightbackground="#24262c"
         )
         self.log_text.pack(fill="both", expand=True)
         self.log_text.configure(state="disabled")
 
-        self.log("Bienvenido a UC Drive Cloud Downloader v2.0.")
-        self.log("Pega el enlace arriba y presiona '🔍 EXPLORAR LINK' para ver y seleccionar qué descargar.")
+        self.log("Bienvenido a UC Drive Cloud Downloader v2.1.")
+        self.log("Pega el enlace arriba y presiona '🔍 EXPLORAR LINK'.")
 
     def update_session_badge(self):
         if engine.is_profile_logged_in():
@@ -393,7 +432,7 @@ class UCDownloaderApp(tk.Tk):
                 self.pwd_id = pwd_id
 
                 self.after(0, self.render_file_tree)
-                self.log(f"¡Exploración completa! Se encontraron {len(files)} archivo(s).")
+                self.log(f"¡Exploración completa! Se encontraron {len(files)} archivo(s) en total.")
             except Exception as e:
                 self.log(f"❌ Error al explorar: {str(e)}")
                 self.after(0, lambda: messagebox.showerror("Error al explorar", str(e)))
@@ -403,7 +442,6 @@ class UCDownloaderApp(tk.Tk):
         threading.Thread(target=_worker, daemon=True).start()
 
     def render_file_tree(self):
-        # Limpiar lista anterior
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
 
@@ -446,6 +484,19 @@ class UCDownloaderApp(tk.Tk):
             )
             cb.pack(anchor="w")
 
+    def update_file_progress(self, pct):
+        self.after(0, lambda: self._apply_file_prog(pct))
+
+    def _apply_file_prog(self, pct):
+        self.bar_file["value"] = pct
+        self.lbl_file_prog.config(text=f"Progreso archivo actual: {pct}%")
+
+    def update_total_progress(self, current, total):
+        self.after(0, lambda: self._apply_total_prog(current, total))
+
+    def _apply_total_prog(self, current, total):
+        self.lbl_total_prog.config(text=f"Progreso lote general: {current}/{total} archivos")
+
     def on_download_click(self):
         url = self.url_var.get().strip()
         if not url:
@@ -462,12 +513,12 @@ class UCDownloaderApp(tk.Tk):
 
         as_zip = (self.download_type.get() == "zip")
 
-        # Si aún no exploró, explorar primero en background y descargar todo
         def _worker():
             self.is_downloading = True
             self.cancel_requested = False
             self.after(0, lambda: self.btn_download.config(state="disabled", text="⏳ DESCARGANDO..."))
             self.after(0, lambda: self.btn_stop.config(state="normal"))
+            self.update_file_progress(0)
 
             try:
                 files_to_download = []
@@ -483,7 +534,6 @@ class UCDownloaderApp(tk.Tk):
                     self.after(0, self.render_file_tree)
                     files_to_download = files
                 else:
-                    # Tomar solo los marcados en la UI
                     for idx, var in enumerate(self.file_vars):
                         if var.get() and idx < len(self.discovered_files):
                             files_to_download.append(self.discovered_files[idx])
@@ -493,6 +543,8 @@ class UCDownloaderApp(tk.Tk):
                     self.after(0, lambda: messagebox.showwarning("Atención", "Por favor selecciona al menos un archivo."))
                     return
 
+                self.update_total_progress(0, len(files_to_download))
+
                 result = asyncio.run(engine.download_selected_files(
                     selected_files=files_to_download,
                     token_info=token_info,
@@ -500,12 +552,15 @@ class UCDownloaderApp(tk.Tk):
                     output_folder=out_dir,
                     as_zip=as_zip,
                     status_callback=self.log,
+                    file_progress_callback=self.update_file_progress,
+                    total_progress_callback=self.update_total_progress,
                     cancel_check=lambda: self.cancel_requested
                 ))
 
                 if not self.cancel_requested:
                     self.log(f"¡Completado con éxito!")
-                    self.after(0, lambda: messagebox.showinfo("Descarga Exitosa", f"Archivo(s) listos en:\n{result}"))
+                    self.update_file_progress(100)
+                    self.after(0, lambda: messagebox.showinfo("Descarga Exitosa", f"Archivo(s) listos con su estructura en:\n{result}"))
             except Exception as e:
                 err_msg = str(e)
                 self.log(f"❌ {err_msg}")

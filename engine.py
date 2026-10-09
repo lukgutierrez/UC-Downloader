@@ -43,6 +43,7 @@ async def run_login_flow(status_callback=None):
 
 def download_file_direct(url, dest_path, progress_callback=None, cancel_check=None):
     """Descarga de alta velocidad con buffer ampliado de 2 MB y reporte de MB/s en tiempo real."""
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     req = urllib.request.Request(
         url,
         headers={
@@ -67,7 +68,7 @@ def download_file_direct(url, dest_path, progress_callback=None, cancel_check=No
             downloaded += len(chunk)
 
             now = time.time()
-            if now - last_report >= 0.5 or downloaded == total_size:
+            if now - last_report >= 0.4 or downloaded == total_size:
                 elapsed = now - start_time
                 speed_mb_s = round((downloaded / (1024 * 1024)) / (elapsed if elapsed > 0 else 1), 2)
                 last_report = now
@@ -78,7 +79,7 @@ def download_file_direct(url, dest_path, progress_callback=None, cancel_check=No
                     progress_callback(percent, dl_mb, tot_mb, speed_mb_s)
 
 async def fetch_share_file_tree(url, status_callback=None):
-    """Exploración recursiva completa y multi-nivel de enlaces y subcarpetas."""
+    """Exploración recursiva completa y multi-nivel de enlaces y subcarpetas preservando rutas relativas."""
     os.makedirs(PROFILE_DIR, exist_ok=True)
     if not url.startswith("http"):
         url = "https://" + url
@@ -126,17 +127,16 @@ async def fetch_share_file_tree(url, status_callback=None):
         await page.goto(url, wait_until="networkidle", timeout=60000)
         await page.wait_for_timeout(2000)
 
-        # Si el enlace raíz tiene una carpeta única contenedora (ej: CURSO METODOS), entrar primero
         all_discovered = []
         known_fids = set()
 
-        def add_items(items, folder_name=""):
+        def add_items(items, folder_path=""):
             for it in items:
                 fid = it.get("fid")
                 if fid and fid not in known_fids:
                     known_fids.add(fid)
-                    if folder_name:
-                        it["folder_path"] = folder_name
+                    if folder_path:
+                        it["folder_path"] = folder_path
                     all_discovered.append(it)
 
         for lst in captured_lists:
@@ -157,18 +157,16 @@ async def fetch_share_file_tree(url, status_callback=None):
                     except Exception:
                         pass
 
-        # Procesar nuevamente lo capturado dentro del curso
         for lst in captured_lists:
             add_items(lst)
 
-        # Ahora buscar todas las subcarpetas internas (ej: Recursos, etc.)
+        # Buscar y explorar todas las subcarpetas internas (ej: Recursos, etc.)
         sub_dirs = [it for it in all_discovered if it.get("dir")]
         for sdir in sub_dirs:
             sname = sdir.get("file_name", "")
-            if sname and sname != "Recursos" and any(x.get("file_name") == sname for x in initial_dirs):
-                pass
+            if sname and any(x.get("file_name") == sname for x in initial_dirs):
+                continue
             
-            # Buscar si existe en la vista actual y hacer click para listar sus archivos
             if status_callback:
                 status_callback(f"Explorando subcarpeta: {sname}...")
             sloc = page.get_by_text(sname).last
@@ -179,10 +177,9 @@ async def fetch_share_file_tree(url, status_callback=None):
                 except Exception:
                     pass
 
-        for lst in captured_lists:
-            add_items(lst)
+            for lst in captured_lists:
+                add_items(lst, folder_path=sname)
 
-        # Filtrar únicamente archivos descargables (no directorios)
         final_files = []
         for it in all_discovered:
             if not it.get("dir"):
@@ -191,8 +188,8 @@ async def fetch_share_file_tree(url, status_callback=None):
         await context.close()
         return final_files, token_info, pwd_id
 
-async def download_selected_files(selected_files, token_info, pwd_id, output_folder, as_zip=True, status_callback=None, progress_callback=None, cancel_check=None):
-    """Descarga por lotes rotativos de alta velocidad los archivos seleccionados."""
+async def download_selected_files(selected_files, token_info, pwd_id, output_folder, as_zip=True, status_callback=None, file_progress_callback=None, total_progress_callback=None, cancel_check=None):
+    """Descarga por lotes rotativos de alta velocidad preservando estructura de subcarpetas y con barra de progreso."""
     os.makedirs(PROFILE_DIR, exist_ok=True)
     os.makedirs(TEMP_DOWNLOAD_DIR, exist_ok=True)
 
@@ -206,7 +203,7 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
         except Exception:
             pass
 
-    downloaded_files = []
+    downloaded_files_map = []  # Lista de tuplas: (temp_filepath, relative_subpath)
     stoken = token_info.get("stoken", "")
 
     headers = {
@@ -238,10 +235,16 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
             fid = file_info.get("fid")
             fid_token = file_info.get("share_fid_token", "")
             pdir_fid = file_info.get("pdir_fid", "0")
+            folder_path = file_info.get("folder_path", "")
             fsize_mb = round(fsize / (1024 * 1024), 1)
 
+            # Notificar progreso general inicial de este archivo
+            if total_progress_callback:
+                total_progress_callback(idx, total_selected)
+
             if status_callback:
-                status_callback(f"[{idx+1}/{total_selected}] Procesando: {fname} ({fsize_mb} MB)...")
+                folder_label = f"[{folder_path}/]" if folder_path else ""
+                status_callback(f"[{idx+1}/{total_selected}] Procesando: {folder_label}{fname} ({fsize_mb} MB)...")
 
             # 1. Guardar en nube por API
             save_payload = {
@@ -261,7 +264,6 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
             save_data = await save_res.json()
             task_id = save_data.get("data", {}).get("task_id")
 
-            # Esperar confirmación
             saved_fid = None
             if task_id:
                 for _ in range(20):
@@ -313,10 +315,16 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
                 continue
 
             download_url = dl_list[0]["download_url"]
-            dest_file_path = os.path.join(TEMP_DOWNLOAD_DIR, fname)
+            
+            # Subcarpeta temporal
+            temp_subfolder = os.path.join(TEMP_DOWNLOAD_DIR, folder_path) if folder_path else TEMP_DOWNLOAD_DIR
+            os.makedirs(temp_subfolder, exist_ok=True)
+            dest_file_path = os.path.join(temp_subfolder, fname)
 
-            # 3. Descarga directa
+            # 3. Descarga directa de alta velocidad
             def _on_prog(pct, cur_mb, tot_mb, spd):
+                if file_progress_callback:
+                    file_progress_callback(pct)
                 if status_callback:
                     status_callback(f"⬇️ {fname}: {pct}% ({cur_mb}/{tot_mb} MB) a {spd} MB/s")
 
@@ -330,11 +338,14 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
                 cancel_check
             )
 
-            downloaded_files.append(dest_file_path)
+            # Guardar ruta relativa para reconstruir la estructura exacta
+            relative_path = os.path.join(folder_path, fname) if folder_path else fname
+            downloaded_files_map.append((dest_file_path, relative_path))
+
             if status_callback:
                 status_callback(f"✅ Descargado: {fname}")
 
-            # 4. Liberar espacio
+            # 4. Liberar espacio inmediatamente
             await context.request.post(
                 "https://m-intldrive.ucweb.com/1/clouddrive/file/delete?ve=&fve=1.8.8&pr=UCBrowser&fr=pc&cc=&sys=win32&ut=&ch=&pc=",
                 headers=headers,
@@ -342,24 +353,27 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
             )
             await asyncio.sleep(0.3)
 
+        if total_progress_callback:
+            total_progress_callback(total_selected, total_selected)
+
         await context.close()
 
-    if not downloaded_files:
+    if not downloaded_files_map:
         raise Exception("No se descargó ningún archivo.")
 
     if status_callback:
-        status_callback("Organizando los archivos finales...")
+        status_callback("Organizando los archivos en tu computadora...")
 
     final_name = f"UC_Descarga_{int(time.time())}"
     if as_zip:
         zip_output_path = os.path.join(output_folder, f"{final_name}.zip")
         if status_callback:
-            status_callback(f"Empaquetando en ZIP: {os.path.basename(zip_output_path)}...")
+            status_callback(f"Empaquetando en ZIP con subcarpetas: {os.path.basename(zip_output_path)}...")
 
         with zipfile.ZipFile(zip_output_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for file_path in downloaded_files:
-                if os.path.isfile(file_path):
-                    zipf.write(file_path, os.path.basename(file_path))
+            for temp_path, rel_path in downloaded_files_map:
+                if os.path.isfile(temp_path):
+                    zipf.write(temp_path, rel_path)
 
         if status_callback:
             status_callback(f"🎉 ¡COMPLETADO! Archivo ZIP listo en: {zip_output_path}")
@@ -367,8 +381,11 @@ async def download_selected_files(selected_files, token_info, pwd_id, output_fol
     else:
         out_target = os.path.join(output_folder, final_name)
         os.makedirs(out_target, exist_ok=True)
-        for file_path in downloaded_files:
-            shutil.move(file_path, os.path.join(out_target, os.path.basename(file_path)))
+        for temp_path, rel_path in downloaded_files_map:
+            target_dest_path = os.path.join(out_target, rel_path)
+            os.makedirs(os.path.dirname(target_dest_path), exist_ok=True)
+            shutil.move(temp_path, target_dest_path)
+
         if status_callback:
-            status_callback(f"🎉 ¡COMPLETADO! Archivos listos en: {out_target}")
+            status_callback(f"🎉 ¡COMPLETADO! Archivos organizados en: {out_target}")
         return out_target
