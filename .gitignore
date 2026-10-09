@@ -1,0 +1,21 @@
+# UC-Downloader
+
+# Ignore Python cache & temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Ignore local Chromium session & profile (contains your private cookies)
+profile/
+profile/*
+
+# Ignore temporary downloaded chunks
+temp_downloads/
+temp_downloads/*
+
+# Ignore test screenshots or logs
+*.log
+*.png
+test_*.py
+check_*.py
