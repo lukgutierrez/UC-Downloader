@@ -9,34 +9,36 @@ import engine
 class UCDownloaderApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("UC Drive Downloader v1.0")
-        self.geometry("740x580")
-        self.minsize(680, 500)
+        self.title("UC Drive Cloud Downloader v2.0 - Pro")
+        self.geometry("820x680")
+        self.minsize(760, 580)
         self.configure(bg="#121316")
-
-        # Set taskbar icon if available
-        try:
-            self.iconbitmap(default="")
-        except Exception:
-            pass
 
         self.default_dest = os.path.join(os.path.expanduser("~"), "Downloads")
         self.dest_folder = tk.StringVar(value=self.default_dest)
         self.url_var = tk.StringVar(value="")
-        self.download_type = tk.StringVar(value="zip")
+        self.download_type = tk.StringVar(value="folder")
+
+        # Variables de estado y exploración
+        self.discovered_files = []
+        self.file_vars = []  # Lista de boolean vars para checkboxes
+        self.token_info = {}
+        self.pwd_id = ""
+        self.is_downloading = False
+        self.cancel_requested = False
 
         self.setup_ui()
         self.update_session_badge()
 
     def setup_ui(self):
-        # Header Frame
-        header = tk.Frame(self, bg="#1a1b1f", pady=15, padx=20)
+        # Header
+        header = tk.Frame(self, bg="#1a1b1f", pady=12, padx=20)
         header.pack(fill="x")
 
         title_lbl = tk.Label(
             header,
-            text="⚡ UC DRIVE CLOUD DOWNLOADER",
-            font=("Segoe UI", 16, "bold"),
+            text="⚡ UC DRIVE CLOUD DOWNLOADER v2.0",
+            font=("Segoe UI", 15, "bold"),
             fg="#00d26a",
             bg="#1a1b1f"
         )
@@ -54,12 +56,12 @@ class UCDownloaderApp(tk.Tk):
         self.badge_lbl.pack(side="right")
 
         # Main Container
-        main = tk.Frame(self, bg="#121316", padx=25, pady=15)
+        main = tk.Frame(self, bg="#121316", padx=20, pady=10)
         main.pack(fill="both", expand=True)
 
-        # Session connection banner
-        sess_frame = tk.Frame(main, bg="#1c1e24", padx=15, pady=10)
-        sess_frame.pack(fill="x", pady=(0, 15))
+        # Login Banner
+        sess_frame = tk.Frame(main, bg="#1c1e24", padx=12, pady=8)
+        sess_frame.pack(fill="x", pady=(0, 10))
 
         sess_info = tk.Label(
             sess_frame,
@@ -80,13 +82,13 @@ class UCDownloaderApp(tk.Tk):
             activebackground="#9d4edd",
             activeforeground="#ffffff",
             relief="flat",
-            padx=12,
-            pady=5,
+            padx=10,
+            pady=4,
             cursor="hand2"
         )
         self.btn_login.pack(side="right")
 
-        # URL Input Section
+        # URL Input & Explorar Button
         url_lbl = tk.Label(
             main,
             text="ENLACE DE UC DRIVE (uc-share.com / drive.ucweb.com):",
@@ -94,10 +96,13 @@ class UCDownloaderApp(tk.Tk):
             fg="#9aa0a6",
             bg="#121316"
         )
-        url_lbl.pack(anchor="w", pady=(0, 5))
+        url_lbl.pack(anchor="w", pady=(0, 4))
+
+        url_box = tk.Frame(main, bg="#121316")
+        url_box.pack(fill="x", pady=(0, 10))
 
         url_entry = tk.Entry(
-            main,
+            url_box,
             textvariable=self.url_var,
             font=("Segoe UI", 11),
             bg="#1f2127",
@@ -108,7 +113,98 @@ class UCDownloaderApp(tk.Tk):
             highlightbackground="#2e313b",
             highlightcolor="#00d26a"
         )
-        url_entry.pack(fill="x", ipady=8, pady=(0, 15))
+        url_entry.pack(side="left", fill="x", expand=True, ipady=6)
+
+        self.btn_explore = tk.Button(
+            url_box,
+            text="🔍 EXPLORAR LINK",
+            command=self.on_explore_click,
+            font=("Segoe UI", 9, "bold"),
+            fg="#ffffff",
+            bg="#2563eb",
+            activebackground="#3b82f6",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=12,
+            pady=6,
+            cursor="hand2"
+        )
+        self.btn_explore.pack(side="right", padx=(8, 0))
+
+        # Files Selection Tree Frame
+        tree_header = tk.Frame(main, bg="#121316")
+        tree_header.pack(fill="x", pady=(0, 4))
+
+        self.lbl_tree_title = tk.Label(
+            tree_header,
+            text="ARCHIVOS DETECTADOS EN EL ENLACE (Selecciona los que desees):",
+            font=("Segoe UI", 9, "bold"),
+            fg="#9aa0a6",
+            bg="#121316"
+        )
+        self.lbl_tree_title.pack(side="left")
+
+        btn_select_all = tk.Button(
+            tree_header,
+            text="Seleccionar Todos",
+            command=self.select_all_files,
+            font=("Segoe UI", 8),
+            fg="#00d26a",
+            bg="#1c1e24",
+            activebackground="#26282f",
+            relief="flat",
+            padx=6,
+            pady=2,
+            cursor="hand2"
+        )
+        btn_select_all.pack(side="right", padx=(4, 0))
+
+        btn_deselect_all = tk.Button(
+            tree_header,
+            text="Deseleccionar Todos",
+            command=self.deselect_all_files,
+            font=("Segoe UI", 8),
+            fg="#e0e0e0",
+            bg="#1c1e24",
+            activebackground="#26282f",
+            relief="flat",
+            padx=6,
+            pady=2,
+            cursor="hand2"
+        )
+        btn_deselect_all.pack(side="right")
+
+        # Scrollable Frame for Checkboxes
+        tree_container = tk.Frame(main, bg="#1a1b1f", highlightthickness=1, highlightbackground="#2e313b", height=130)
+        tree_container.pack(fill="x", pady=(0, 10))
+        tree_container.pack_propagate(False)
+
+        self.canvas = tk.Canvas(tree_container, bg="#18191d", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tree_container, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = tk.Frame(self.canvas, bg="#18191d")
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Default placeholder in file list
+        self.lbl_empty = tk.Label(
+            self.scrollable_frame,
+            text="Pega un enlace y presiona '🔍 EXPLORAR LINK' para ver los archivos antes de descargar.",
+            font=("Segoe UI", 9, "italic"),
+            fg="#6b7280",
+            bg="#18191d",
+            padx=10,
+            pady=15
+        )
+        self.lbl_empty.pack(anchor="w")
 
         # Output Folder Section
         folder_lbl = tk.Label(
@@ -118,10 +214,10 @@ class UCDownloaderApp(tk.Tk):
             fg="#9aa0a6",
             bg="#121316"
         )
-        folder_lbl.pack(anchor="w", pady=(0, 5))
+        folder_lbl.pack(anchor="w", pady=(0, 4))
 
         folder_box = tk.Frame(main, bg="#121316")
-        folder_box.pack(fill="x", pady=(0, 15))
+        folder_box.pack(fill="x", pady=(0, 10))
 
         folder_entry = tk.Entry(
             folder_box,
@@ -150,9 +246,23 @@ class UCDownloaderApp(tk.Tk):
         )
         btn_browse.pack(side="right", padx=(8, 0))
 
-        # Format Options & Download Button
+        # Format Options & Download / Cancel Buttons
         action_box = tk.Frame(main, bg="#121316")
-        action_box.pack(fill="x", pady=(0, 15))
+        action_box.pack(fill="x", pady=(0, 10))
+
+        opt_folder = tk.Radiobutton(
+            action_box,
+            text="Extraer en carpeta directa (Recomendado)",
+            variable=self.download_type,
+            value="folder",
+            font=("Segoe UI", 9),
+            fg="#e0e0e0",
+            bg="#121316",
+            selectcolor="#1f2127",
+            activebackground="#121316",
+            activeforeground="#00d26a"
+        )
+        opt_folder.pack(side="left")
 
         opt_zip = tk.Radiobutton(
             action_box,
@@ -166,37 +276,39 @@ class UCDownloaderApp(tk.Tk):
             activebackground="#121316",
             activeforeground="#00d26a"
         )
-        opt_zip.pack(side="left")
-
-        opt_folder = tk.Radiobutton(
-            action_box,
-            text="Extraer en carpeta directa",
-            variable=self.download_type,
-            value="folder",
-            font=("Segoe UI", 9),
-            fg="#e0e0e0",
-            bg="#121316",
-            selectcolor="#1f2127",
-            activebackground="#121316",
-            activeforeground="#00d26a"
-        )
-        opt_folder.pack(side="left", padx=(15, 0))
+        opt_zip.pack(side="left", padx=(15, 0))
 
         self.btn_download = tk.Button(
             action_box,
-            text="⬇️ DESCARGAR TODO AHORA",
+            text="⬇️ DESCARGAR SELECCIONADOS",
             command=self.on_download_click,
-            font=("Segoe UI", 11, "bold"),
+            font=("Segoe UI", 10, "bold"),
             fg="#121316",
             bg="#00d26a",
             activebackground="#00b55b",
             activeforeground="#121316",
             relief="flat",
-            padx=20,
-            pady=8,
+            padx=16,
+            pady=6,
             cursor="hand2"
         )
         self.btn_download.pack(side="right")
+
+        self.btn_stop = tk.Button(
+            action_box,
+            text="⏹️ DETENER",
+            command=self.on_stop_click,
+            font=("Segoe UI", 10, "bold"),
+            fg="#ffffff",
+            bg="#dc2626",
+            activebackground="#ef4444",
+            relief="flat",
+            padx=12,
+            pady=6,
+            state="disabled",
+            cursor="hand2"
+        )
+        self.btn_stop.pack(side="right", padx=(0, 8))
 
         # Console / Status Section
         console_lbl = tk.Label(
@@ -206,7 +318,7 @@ class UCDownloaderApp(tk.Tk):
             fg="#9aa0a6",
             bg="#121316"
         )
-        console_lbl.pack(anchor="w", pady=(0, 5))
+        console_lbl.pack(anchor="w", pady=(0, 4))
 
         self.log_text = tk.Text(
             main,
@@ -214,15 +326,15 @@ class UCDownloaderApp(tk.Tk):
             bg="#0e0f11",
             fg="#c5c8cf",
             relief="flat",
-            height=8,
+            height=7,
             highlightthickness=1,
             highlightbackground="#24262c"
         )
         self.log_text.pack(fill="both", expand=True)
         self.log_text.configure(state="disabled")
 
-        self.log("Bienvenido a UC Drive Downloader.")
-        self.log("Pega el link y presiona 'Descargar Todo Ahora'.")
+        self.log("Bienvenido a UC Drive Cloud Downloader v2.0.")
+        self.log("Pega el enlace arriba y presiona '🔍 EXPLORAR LINK' para ver y seleccionar qué descargar.")
 
     def update_session_badge(self):
         if engine.is_profile_logged_in():
@@ -241,6 +353,14 @@ class UCDownloaderApp(tk.Tk):
         if folder:
             self.dest_folder.set(folder)
 
+    def select_all_files(self):
+        for var in self.file_vars:
+            var.set(True)
+
+    def deselect_all_files(self):
+        for var in self.file_vars:
+            var.set(False)
+
     def on_login_click(self):
         self.btn_login.config(state="disabled")
         self.log("Abriendo navegador para inicio de sesión seguro...")
@@ -255,6 +375,76 @@ class UCDownloaderApp(tk.Tk):
                 self.after(0, lambda: self.btn_login.config(state="normal"))
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def on_explore_click(self):
+        url = self.url_var.get().strip()
+        if not url:
+            messagebox.showwarning("Atención", "Por favor pega un enlace de UC Drive.")
+            return
+
+        self.btn_explore.config(state="disabled", text="🔍 EXPLORANDO...")
+        self.log(f"Explorando enlace: {url}")
+
+        def _worker():
+            try:
+                files, token_info, pwd_id = asyncio.run(engine.fetch_share_file_tree(url, status_callback=self.log))
+                self.discovered_files = files
+                self.token_info = token_info
+                self.pwd_id = pwd_id
+
+                self.after(0, self.render_file_tree)
+                self.log(f"¡Exploración completa! Se encontraron {len(files)} archivo(s).")
+            except Exception as e:
+                self.log(f"❌ Error al explorar: {str(e)}")
+                self.after(0, lambda: messagebox.showerror("Error al explorar", str(e)))
+            finally:
+                self.after(0, lambda: self.btn_explore.config(state="normal", text="🔍 EXPLORAR LINK"))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def render_file_tree(self):
+        # Limpiar lista anterior
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        self.file_vars.clear()
+
+        if not self.discovered_files:
+            lbl = tk.Label(
+                self.scrollable_frame,
+                text="No se encontraron archivos en este enlace.",
+                font=("Segoe UI", 9, "italic"),
+                fg="#ef4444",
+                bg="#18191d",
+                padx=10,
+                pady=10
+            )
+            lbl.pack(anchor="w")
+            return
+
+        for idx, file_info in enumerate(self.discovered_files):
+            var = tk.BooleanVar(value=True)
+            self.file_vars.append(var)
+
+            fname = file_info.get("file_name", f"archivo_{idx+1}")
+            fsize = file_info.get("size", 0)
+            fsize_mb = round(fsize / (1024 * 1024), 1)
+            folder_tag = f"📁 [{file_info['folder_path']}] " if "folder_path" in file_info else ""
+
+            cb = tk.Checkbutton(
+                self.scrollable_frame,
+                text=f"{folder_tag}{fname} ({fsize_mb} MB)",
+                variable=var,
+                font=("Segoe UI", 9),
+                fg="#e0e0e0",
+                bg="#18191d",
+                selectcolor="#121316",
+                activebackground="#18191d",
+                activeforeground="#00d26a",
+                padx=5,
+                pady=2
+            )
+            cb.pack(anchor="w")
 
     def on_download_click(self):
         url = self.url_var.get().strip()
@@ -272,27 +462,67 @@ class UCDownloaderApp(tk.Tk):
 
         as_zip = (self.download_type.get() == "zip")
 
-        self.btn_download.config(state="disabled", text="⏳ DESCARGANDO...")
-        self.log(f"Iniciando tarea para: {url}")
-
+        # Si aún no exploró, explorar primero en background y descargar todo
         def _worker():
+            self.is_downloading = True
+            self.cancel_requested = False
+            self.after(0, lambda: self.btn_download.config(state="disabled", text="⏳ DESCARGANDO..."))
+            self.after(0, lambda: self.btn_stop.config(state="normal"))
+
             try:
-                result = asyncio.run(engine.download_uc_share(
-                    url=url,
+                files_to_download = []
+                token_info = self.token_info
+                pwd_id = self.pwd_id
+
+                if not self.discovered_files:
+                    self.log("Explorando enlace automáticamente...")
+                    files, t_info, p_id = asyncio.run(engine.fetch_share_file_tree(url, status_callback=self.log))
+                    self.discovered_files = files
+                    token_info = t_info
+                    pwd_id = p_id
+                    self.after(0, self.render_file_tree)
+                    files_to_download = files
+                else:
+                    # Tomar solo los marcados en la UI
+                    for idx, var in enumerate(self.file_vars):
+                        if var.get() and idx < len(self.discovered_files):
+                            files_to_download.append(self.discovered_files[idx])
+
+                if not files_to_download:
+                    self.log("⚠️ No hay ningún archivo seleccionado para descargar.")
+                    self.after(0, lambda: messagebox.showwarning("Atención", "Por favor selecciona al menos un archivo."))
+                    return
+
+                result = asyncio.run(engine.download_selected_files(
+                    selected_files=files_to_download,
+                    token_info=token_info,
+                    pwd_id=pwd_id,
                     output_folder=out_dir,
                     as_zip=as_zip,
-                    status_callback=self.log
+                    status_callback=self.log,
+                    cancel_check=lambda: self.cancel_requested
                 ))
-                self.log(f"¡Completado con éxito!")
-                self.after(0, lambda: messagebox.showinfo("Descarga Exitosa", f"Archivo listo en:\n{result}"))
+
+                if not self.cancel_requested:
+                    self.log(f"¡Completado con éxito!")
+                    self.after(0, lambda: messagebox.showinfo("Descarga Exitosa", f"Archivo(s) listos en:\n{result}"))
             except Exception as e:
                 err_msg = str(e)
-                self.log(f"❌ Error: {err_msg}")
-                self.after(0, lambda: messagebox.showerror("Error en Descarga", f"{err_msg}"))
+                self.log(f"❌ {err_msg}")
+                if not self.cancel_requested:
+                    self.after(0, lambda: messagebox.showerror("Error en Descarga", f"{err_msg}"))
             finally:
-                self.after(0, lambda: self.btn_download.config(state="normal", text="⬇️ DESCARGAR TODO AHORA"))
+                self.is_downloading = False
+                self.after(0, lambda: self.btn_download.config(state="normal", text="⬇️ DESCARGAR SELECCIONADOS"))
+                self.after(0, lambda: self.btn_stop.config(state="disabled"))
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def on_stop_click(self):
+        if self.is_downloading:
+            self.cancel_requested = True
+            self.log("🛑 Solicitando detención de la descarga...")
+            self.btn_stop.config(state="disabled")
 
 if __name__ == "__main__":
     app = UCDownloaderApp()
