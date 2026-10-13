@@ -17,5 +17,6 @@ temp_downloads/*
 # Ignore test screenshots or logs
 *.log
 *.png
+!assets/*.png
 test_*.py
 check_*.py
